@@ -1,0 +1,26 @@
+{
+    "name": "babel-plugin-react-track",
+    "version": "1.0.0",
+    "description": "A Babel plugin that auto-injects event tracking code into JSX event handlers via @track comment annotations",
+    "license": "MIT",
+    "author": "JoeWright <1035208578@qq.com>",
+    "main": "./lib/index.js",
+    "files": [
+        "./lib"
+    ],
+    "scripts": {
+        "build": "./node_modules/.bin/rimraf ./lib & yarn tsc",
+        "tsc": "./node_modules/.bin/tsc"
+    },
+    "devDependencies": {
+        "@babel/code-frame": "^7.29.0",
+        "@babel/core": "^8.0.1",
+        "@babel/parser": "^7.29.2",
+        "@babel/template": "^8.0.0",
+        "@babel/traverse": "^7.29.0",
+        "@babel/types": "^7.29.0",
+        "@types/node": "^20.12.12",
+        "rimraf": "^6.1.3",
+        "typescript": "5.1.6"
+    }
+}
