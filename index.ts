@@ -11,6 +11,139 @@ const _fileAstCache = {};
 // 每个文件编译期间解析的外部文件路径，用于 addDependency
 let _currentResolvedFiles = [];
 
+// 当前插件实例的 alias 配置，由 Program enter 设置
+let _currentPluginAlias = null;
+
+// ========== 别名路径解析 ==========
+
+// baseUrl 配置缓存，避免每个文件重复读取 tsconfig
+const _baseUrlConfigCache = {};
+let _projectRootCache = null;
+
+// 从当前文件向上查找项目根目录（含 package.json 或 tsconfig.json）
+function findProjectRoot(currentFile) {
+  if (_projectRootCache) return _projectRootCache;
+  let dir = pathModule.dirname(currentFile);
+  while (true) {
+    if (
+      fs.existsSync(pathModule.join(dir, 'package.json')) ||
+      fs.existsSync(pathModule.join(dir, 'tsconfig.json'))
+    ) {
+      _projectRootCache = dir;
+      return dir;
+    }
+    const parent = pathModule.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  _projectRootCache = dir;
+  return dir;
+}
+
+// 从 tsconfig/jsconfig 中读取 baseUrl 和 paths
+function findBaseUrlConfig(currentFile) {
+  const root = findProjectRoot(currentFile);
+  if (_baseUrlConfigCache[root] !== undefined) return _baseUrlConfigCache[root];
+
+  let configPath = null;
+  for (const name of ['tsconfig.json', 'jsconfig.json']) {
+    const p = pathModule.join(root, name);
+    if (fs.existsSync(p)) { configPath = p; break; }
+  }
+  if (!configPath) { _baseUrlConfigCache[root] = null; return null; }
+
+  try {
+    const raw = fs.readFileSync(configPath, 'utf-8');
+    // 去除注释和尾逗号（tsconfig 支持 JSONC 格式）
+    const cleaned = raw
+      .replace(/\/\/.*$/gm, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/,(\s*[}\]])/g, '$1');
+    const config = JSON.parse(cleaned);
+    const co = config.compilerOptions || {};
+    const result = {
+      baseUrl: co.baseUrl ? pathModule.resolve(root, co.baseUrl) : root,
+      paths: co.paths || {},
+    };
+    _baseUrlConfigCache[root] = result;
+    return result;
+  } catch (e) {
+    _baseUrlConfigCache[root] = null;
+    return null;
+  }
+}
+
+// 匹配 paths 配置中的别名模式（如 @/* → src/*）
+function matchAlias(source, paths, baseUrl) {
+  for (const [pattern, targets] of Object.entries(paths)) {
+    if (!Array.isArray(targets) || targets.length === 0) continue;
+    const starIdx = pattern.indexOf('*');
+    if (starIdx === -1) {
+      // 精确匹配（如 "@hooks" → ["src/hooks"]）
+      if (pattern === source) {
+        return pathModule.resolve(baseUrl, targets[0]);
+      }
+    } else {
+      // 通配符匹配（如 "@/*" → ["src/*"]）
+      const prefix = pattern.slice(0, starIdx);
+      if (source.startsWith(prefix)) {
+        const rest = source.slice(prefix.length);
+        const target = targets[0];
+        const tStarIdx = target.indexOf('*');
+        if (tStarIdx !== -1) {
+          return pathModule.resolve(baseUrl, target.slice(0, tStarIdx) + rest);
+        }
+        return pathModule.resolve(baseUrl, target);
+      }
+    }
+  }
+  return null;
+}
+
+// 将 import source 解析为绝对文件路径，支持相对路径、别名路径和 baseUrl 相对路径
+function resolveModulePath(source, currentFile, pluginAlias) {
+  // 1. 相对路径
+  if (source.startsWith('.')) {
+    const dir = pathModule.dirname(currentFile);
+    return tryResolveFile(pathModule.resolve(dir, source));
+  }
+
+  // 2. 插件选项显式传入的 alias 映射
+  if (pluginAlias) {
+    const aliased = matchAlias(source, pluginAlias, pathModule.dirname(currentFile));
+    if (aliased) {
+      const resolved = tryResolveFile(aliased);
+      if (resolved) return resolved;
+    }
+  }
+
+  // 3. 从 tsconfig/jsconfig 自动检测 alias
+  const config = findBaseUrlConfig(currentFile);
+  if (config) {
+    // 3a. paths 别名匹配
+    const aliased = matchAlias(source, config.paths, config.baseUrl);
+    if (aliased) {
+      const resolved = tryResolveFile(aliased);
+      if (resolved) return resolved;
+    }
+
+    // 3b. baseUrl 相对路径（如 src/hooks 解析为 <baseUrl>/src/hooks）
+    const baseUrlResolved = tryResolveFile(pathModule.resolve(config.baseUrl, source));
+    if (baseUrlResolved) return baseUrlResolved;
+  }
+
+  return null;
+}
+
+// 尝试解析文件路径：先直接检查，再逐个尝试常见扩展名
+function tryResolveFile(filePath) {
+  if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) return filePath;
+  for (const ext of ['.ts', '.tsx', '.js', '.jsx']) {
+    if (fs.existsSync(filePath + ext)) return filePath + ext;
+  }
+  return null;
+}
+
 // 构建埋点代码 AST
 // eventType: 从 on* 属性名提取的事件类型（如 'click', 'scroll'）
 // useDedup: 非 click 事件启用 WeakMap 去重，同一元素只上报一次
@@ -353,22 +486,11 @@ function extractTrackFromFuncBody(funcNode, varName) {
 function resolveTrackFromImport(binding, varName) {
   const importInfo = getImportInfo(binding);
   if (!importInfo) return null;
-  // 解析源文件路径
+  // 解析源文件路径（支持相对路径、别名路径、baseUrl 相对路径）
   const currentFile = binding.path.hub.file.opts.filename;
-
-  let sourcePath = importInfo.source;
-  if (sourcePath.startsWith('.')) {
-    const dir = pathModule.dirname(currentFile);
-    sourcePath = pathModule.resolve(dir, sourcePath);
-  }
-  // 尝试常见扩展名
-  let filePath = sourcePath;
-  if (!fs.existsSync(filePath)) {
-    for (const ext of ['.ts', '.tsx', '.js', '.jsx']) {
-      if (fs.existsSync(filePath + ext)) { filePath = filePath + ext; break; }
-    }
-  }
-  if (!fs.existsSync(filePath)) return null;
+  const pluginAlias = _currentPluginAlias;
+  const filePath = resolveModulePath(importInfo.source, currentFile, pluginAlias);
+  if (!filePath) return null;
 
 
   // 记录外部文件依赖，用于 HMR 热更新
@@ -761,6 +883,7 @@ module.exports = function (_, options = {}) {
       Program: {
         enter(path) {
           _currentResolvedFiles = [];
+          _currentPluginAlias = options.alias || null;
 
           let hasEvents = false;
           let hasNonClickEvents = false;

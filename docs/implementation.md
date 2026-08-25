@@ -13,7 +13,14 @@
 ### 2.1 模块结构
 
 ```
-index.ts（819 行）
+index.ts（~940 行）
+├── 别名路径解析层
+│   ├── findProjectRoot()          — 向上查找项目根目录
+│   ├── findBaseUrlConfig()        — 从 tsconfig/jsconfig 读取 baseUrl + paths
+│   ├── matchAlias()               — 匹配 paths 别名模式（如 @/* → src/*）
+│   ├── resolveModulePath()        — 统一路径解析入口（相对路径 / 别名 / baseUrl）
+│   └── tryResolveFile()           — 尝试补全扩展名解析文件
+│
 ├── AST 构建层
 │   ├── buildTrackStatement()      — 构建埋点调用语句（含去重逻辑）
 │   ├── buildSdkFallback()         — 构建 __TRACK_SDK__ 兜底变量
@@ -426,7 +433,7 @@ const { h1Click } = useClick();
 - 性能：`@babel/parser` 只做语法解析，不需要类型检查，速度快
 - 一致性：项目本身用 Babel 编译，AST 格式一致
 - 依赖简洁：`@babel/parser` 已是 Babel 插件的依赖
-- 够用：需求只是"读取源文件的注释和函数结构"
+- 够用：需求只是“读取源文件的注释和函数结构”。别名路径解析只需读取 tsconfig.json 的 `compilerOptions.paths`，用 JSON.parse 即可，不需要完整的 TypeScript 类型解析能力
 
 ### 7.3 为什么非 click 事件需要 WeakMap 去重？
 
@@ -442,7 +449,7 @@ const { h1Click } = useClick();
 
 | 限制                            | 原因                                                   |
 | ------------------------------- | ------------------------------------------------------ |
-| 跨文件仅支持相对路径 import     | 不支持 `node_modules` 或别名路径（如 `@/hooks`）       |
+| 跨文件仅支持相对路径和别名路径 import | 不支持 `node_modules` 内的包路径解析（别名路径通过 tsconfig/jsconfig 自动检测或插件选项手动配置） |
 | 跨文件注释修改需重启 dev server | babel-loader 不向插件暴露 `addDependency` API          |
 | `@track.eventName` 是必填项     | 未声明时不插桩，这是设计决策而非缺陷                   |
 | 仅支持箭头函数和直接引用        | 不支持 `this.handleClick`、`.bind()`、条件表达式等     |

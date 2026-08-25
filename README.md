@@ -17,9 +17,9 @@
 ## 安装
 
 ```bash
-npm install @hg-info/babel-plugin-react-track
+npm install babel-plugin-react-track
 # 或
-pnpm add @hg-info/babel-plugin-react-track
+pnpm add babel-plugin-react-track
 ```
 
 ## 配置
