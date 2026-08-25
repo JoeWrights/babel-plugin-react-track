@@ -48,16 +48,30 @@ pnpm add babel-plugin-react-track
 export default {
   tools: {
     bundlerChain(chain) {
-      chain
-        .module("rule-tsx")
+      chain.module
+        .rule("react-track")
+        .test(/\.[jt]sx?$/)
+        .include.add(appDir)
+        .end()
         .use("babel-loader")
-        .tap((options) => {
-          options.plugins = options.plugins || [];
-          options.plugins.push([
-            require.resolve("babel-plugin-react-track"),
-            { sdkSource: "track-sdk", trackFnName: "trackEvent" },
-          ]);
-          return options;
+        .loader("babel-loader")
+        .options({
+          babelrc: false,
+          configFile: false,
+          plugins: [
+            [
+              require.resolve("@babel/plugin-syntax-typescript"),
+              { isTSX: true },
+            ],
+            require.resolve("@babel/plugin-syntax-jsx"),
+            [
+              trackPlugin,
+              {
+                sdkSource: resolve(appDir, "src/lib/track.ts"),
+                trackFnName: "trackEvent",
+              },
+            ],
+          ],
         });
     },
   },
