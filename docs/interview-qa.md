@@ -78,7 +78,7 @@ AST 构建全部使用 `@babel/types` 的 `t.xxx()` 方法，不用 `@babel/temp
 完整链路是：
 
 1. **识别 import 来源**：通过 `getImportInfo` 检查 binding 的 path 是否是 `ImportSpecifier`，从中提取 `source`（如 `'./hooks'`）和 `importedName`（如 `'useClick'`）
-2. **解析文件路径**：将相对路径转为绝对路径，自动补全 `.ts/.tsx/.js/.jsx` 扩展名
+2. **解析文件路径**：将 import source 转为绝对路径。支持相对路径、tsconfig/jsconfig 的 `paths` 别名（如 `@/hooks`）和 `baseUrl` 相对路径，自动补全 `.ts/.tsx/.js/.jsx` 扩展名
 3. **解析源文件 AST**：用 `@babel/parser` 读取源文件并解析为 AST，结果缓存到 `_fileAstCache`
 4. **定位 export 声明**：在源文件 AST 中通过 `findExportedDecl` 找到对应的 export 函数声明
 5. **扫描函数体**：在函数体中找到同名变量的声明，提取其 `leadingComments` 中的 `@track` 注释
@@ -103,9 +103,9 @@ App.tsx: const { h1Click } = useClick()
 1. **性能**：TypeScript Compiler API 需要创建完整的 Program（包含类型检查），而 `@babel/parser` 只做语法解析，速度快得多。我们只需要读取注释和 AST 结构，不需要类型信息
 2. **一致性**：项目本身就用 Babel 编译，用 `@babel/parser` 解析源文件可以保证 AST 格式一致，不需要处理两套 AST 规范的差异
 3. **依赖简洁**：`@babel/parser` 已经是 Babel 插件的依赖，不需要额外引入 TypeScript 作为运行时依赖
-4. **够用**：我们的需求只是"读取源文件的注释和函数结构"，不涉及类型推导、接口解析等复杂场景
+4. **够用**：我们的需求只是“读取源文件的注释和函数结构”，不涉及类型推导、接口解析等复杂场景。别名路径解析也只需读取 tsconfig.json 的 `compilerOptions.paths`，用 `JSON.parse` 即可，不需要完整的 TypeScript 类型解析能力
 
-当然也有局限：不支持别名路径（如 `@/hooks`），只支持相对路径 import。这是当前方案的一个已知限制。
+当然也有局限：不支持 `node_modules` 内的包路径解析（如 monorepo 中通过包名引用其他包）。这是当前方案的一个已知限制。
 
 ---
 
@@ -294,7 +294,7 @@ HTML 属性规范不支持驼峰命名，`data-track-product-id` 是标准的 HT
 
 几个方向：
 
-1. **支持别名路径**：当前跨文件解析只支持相对路径 import，可以通过读取 `tsconfig.json` 的 `paths` 配置或 webpack/rspack 的 `alias` 配置来支持 `@/hooks` 这别名
+1. **支持别名路径**：当前跨文件解析支持相对路径 import、tsconfig/jsconfig 的 `paths` 别名（如 `@/hooks`）以及 `baseUrl` 相对路径，也支持通过插件选项手动传入 `alias` 映射
 2. **类型安全的注释配置**：将 `@track` 注释迁移为 TypeScript 类型声明或 JSDoc 泛型，让 IDE 和类型检查器能验证配置的正确性
 3. **解决跨文件 HMR**：可以考虑通过 Rsbuild 插件（而非 Babel 插件）的方式集成，Rsbuild 插件有完整的构建生命周期，可以注册文件依赖
 4. **支持更多表达式**：当前只处理箭头函数和直接引用，可以扩展到 `useCallback` 的内联函数、`bind` 绑定等场景
